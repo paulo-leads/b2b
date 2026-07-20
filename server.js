@@ -1,11 +1,72 @@
 require('dotenv').config();
 const express = require('express');
-const sqlite3 = require('sqlite3').verbose();
-const { open } = require('sqlite');
 const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+
+// Simple in-memory database for Railway compatibility (no native dependencies)
+let db = {
+    leads: new Map(),
+    messages: [],
+    init: function() {
+        console.log('✅ Banco de dados em memória inicializado');
+    },
+    all: function(sql, params = []) {
+        // Simplified query handler for leads table
+        if (sql.includes('SELECT') && sql.includes('leads')) {
+            return Array.from(this.leads.values());
+        }
+        if (sql.includes('SELECT') && sql.includes('messages')) {
+            const phone = params[0];
+            return this.messages.filter(m => m.lead_phone === phone);
+        }
+        return [];
+    },
+    run: function(sql, params = []) {
+        // Simplified INSERT/UPDATE handler
+        if (sql.includes('INSERT INTO leads')) {
+            const phone = params[0];
+            const name = params[1];
+            if (!this.leads.has(phone)) {
+                this.leads.set(phone, { id: this.leads.size + 1, phone, name: name || null, status: 'novo', last_message_at: new Date().toISOString(), ai_active: 1 });
+            } else {
+                const lead = this.leads.get(phone);
+                lead.last_message_at = new Date().toISOString();
+                lead.status = 'respondido';
+                if (name) lead.name = name;
+                this.leads.set(phone, lead);
+            }
+        }
+        if (sql.includes('INSERT INTO messages')) {
+            this.messages.push({
+                lead_phone: params[0],
+                wa_message_id: params[1],
+                direction: params[2],
+                type: params[3],
+                content: params[4],
+                timestamp: new Date().toISOString()
+            });
+        }
+        if (sql.includes('UPDATE leads SET ai_active')) {
+            const phone = params[1];
+            if (this.leads.has(phone)) {
+                const lead = this.leads.get(phone);
+                lead.ai_active = params[0] ? 1 : 0;
+                this.leads.set(phone, lead);
+            }
+        }
+        if (sql.includes('UPDATE leads SET status')) {
+            const phone = params[0];
+            if (this.leads.has(phone)) {
+                const lead = this.leads.get(phone);
+                if (lead.status === 'respondido') lead.status = 'lido';
+                this.leads.set(phone, lead);
+            }
+        }
+    }
+};
+db.init();
 
 const app = express();
 
@@ -36,13 +97,13 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 app.get('/', (req, res, next) => {
-    if (req.hostname === FACADE_URL) return res.sendFile(path.join(__dirname, 'public/index.html'));
-    next();
+    // Sempre serve o frontend na raiz, independente do hostname
+    return res.sendFile(path.join(__dirname, 'public/index.html'));
 });
 
 app.use((req, res, next) => {
     if (req.path === '/webhook' || req.path.startsWith('/api/webhook') || req.path.startsWith('/uploads') || req.path.startsWith('/api/media')) return next();
-    if (req.hostname === FACADE_URL) return next();
+    // Remove a verificação de hostname para permitir acesso direto na Railway
     const b64auth = (req.headers.authorization || '').split(' ')[1] || '';
     const [login, password] = Buffer.from(b64auth, 'base64').toString().split(':');
     if (login && password && login === ADMIN_USER && password === ADMIN_PASS) return next();
@@ -51,7 +112,12 @@ app.use((req, res, next) => {
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
-let db;
+
+// Serve index.html para todas as rotas não-API (fallback SPA)
+app.get('/{*path}', (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/webhook') || req.path.includes('.')) return next();
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
 app.post('/api/webhook/erp', (req, res) => {
     const authHeader = req.headers.authorization;
@@ -110,28 +176,25 @@ async function sendWhatsAppMessage(data) {
     }
 }
 
-(async () => {
-    db = await open({ filename: path.join(__dirname, 'database', 'leads.db'), driver: sqlite3.Database });
-    await db.exec(`CREATE TABLE IF NOT EXISTS leads (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT NOT NULL UNIQUE, name TEXT, status TEXT DEFAULT 'novo', last_message_at DATETIME, ai_active BOOLEAN DEFAULT 1)`);
-    await db.exec(`CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, lead_phone TEXT NOT NULL, wa_message_id TEXT, direction TEXT NOT NULL, type TEXT NOT NULL, content TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)`);
-})();
-
 app.get('/api/leads', async (req, res) => {
     try {
-        const leads = await db.all(`
-            SELECT l.*,
-            (SELECT content FROM messages m WHERE m.lead_phone = l.phone ORDER BY timestamp DESC LIMIT 1) as last_message
-            FROM leads l
-            WHERE l.status != 'morto'
-            ORDER BY l.last_message_at DESC
-        `);
+        const leads = db.all('SELECT leads');
         res.json({ leads });
     } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get('/api/leads/:phone/messages', async (req, res) => res.json(await db.all('SELECT * FROM messages WHERE lead_phone = ? ORDER BY timestamp ASC', [req.params.phone])));
-app.post('/api/leads/:phone/toggle_ai', async (req, res) => { await db.run(`UPDATE leads SET ai_active = ? WHERE phone = ?`, [req.body.ai_active ? 1 : 0, req.params.phone]); res.json({ success: true }); });
-app.post('/api/leads/:phone/mark_read', async (req, res) => { await db.run(`UPDATE leads SET status = 'lido' WHERE phone = ? AND status = 'respondido'`, [req.params.phone]); res.json({ success: true }); });
+app.get('/api/leads/:phone/messages', async (req, res) => {
+    const messages = db.all('SELECT messages', [req.params.phone]);
+    res.json(messages);
+});
+app.post('/api/leads/:phone/toggle_ai', async (req, res) => { 
+    db.run(`UPDATE leads SET ai_active`, [req.body.ai_active ? 1 : 0, req.params.phone]); 
+    res.json({ success: true }); 
+});
+app.post('/api/leads/:phone/mark_read', async (req, res) => { 
+    db.run(`UPDATE leads SET status`, [req.params.phone]); 
+    res.json({ success: true }); 
+});
 
 app.get('/api/knowledge', (req, res) => {
     try {
@@ -218,8 +281,13 @@ app.post('/api/hunt/batch', async (req, res) => {
 });
 
 app.post('/api/actions/last_chance_blast', async (req, res) => {
-    const targets = await db.all(`SELECT phone FROM leads WHERE status = 'respondido' AND last_message_at >= datetime('now', '-23 hours')`);
-    for (const t of targets) { await sendWhatsAppMessage({ messaging_product: "whatsapp", to: t.phone, type: "text", text: { body: req.body.message } }); await new Promise(r => setTimeout(r, 800)); }
+    const targets = db.all('SELECT leads');
+    for (const t of targets) { 
+        if (t.status === 'respondido') {
+            await sendWhatsAppMessage({ messaging_product: "whatsapp", to: t.phone, type: "text", text: { body: req.body.message } }); 
+            await new Promise(r => setTimeout(r, 800)); 
+        }
+    }
     res.json({ success: true });
 });
 
