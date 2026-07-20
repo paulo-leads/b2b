@@ -29,6 +29,88 @@
             color: #fff;
         }
 
+        /* Login Screen Styles */
+        #login-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, var(--dark) 0%, #16213e 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 10000;
+        }
+
+        .login-box {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            text-align: center;
+            max-width: 400px;
+            width: 90%;
+        }
+
+        .login-box h1 {
+            color: var(--primary);
+            margin-bottom: 10px;
+            font-size: 2rem;
+        }
+
+        .login-box p {
+            opacity: 0.7;
+            margin-bottom: 30px;
+        }
+
+        .login-input {
+            width: 100%;
+            padding: 15px;
+            margin-bottom: 20px;
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.05);
+            color: #fff;
+            font-size: 1rem;
+            transition: all 0.3s;
+        }
+
+        .login-input:focus {
+            outline: none;
+            border-color: var(--primary);
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .login-btn {
+            width: 100%;
+            padding: 15px;
+            background: var(--primary);
+            color: #fff;
+            border: none;
+            border-radius: 10px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .login-btn:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+        }
+
+        .login-error {
+            color: var(--danger);
+            margin-top: 15px;
+            display: none;
+        }
+
+        #app-content {
+            display: none;
+        }
+
         .container {
             max-width: 1400px;
             margin: 0 auto;
@@ -388,6 +470,20 @@
     </style>
 </head>
 <body>
+    <!-- Login Screen -->
+    <div id="login-screen">
+        <div class="login-box">
+            <h1>Refúgio Laguna</h1>
+            <p>CRM WhatsApp V8.5 - Área Restrita</p>
+            <input type="text" id="login-user" class="login-input" placeholder="Usuário" value="Ragazzi">
+            <input type="password" id="login-pass" class="login-input" placeholder="Senha" value="Operador01">
+            <button class="login-btn" onclick="doLogin()">ENTRAR</button>
+            <p class="login-error" id="login-error">Usuário ou senha inválidos!</p>
+        </div>
+    </div>
+
+    <!-- App Content (Hidden until login) -->
+    <div id="app-content">
     <div class="container">
         <header>
             <h1>🚀 Refúgio Laguna CRM</h1>
@@ -831,6 +927,52 @@
             modal.addEventListener('click', (e) => {
                 if (e.target === modal) modal.classList.remove('active');
             });
+        });
+
+        // Login Function
+        function doLogin() {
+            const user = document.getElementById('login-user').value;
+            const pass = document.getElementById('login-pass').value;
+            const auth = btoa(user + ':' + pass);
+            
+            fetch('/api/health', {
+                headers: { 'Authorization': 'Basic ' + auth }
+            })
+            .then(res => {
+                if (res.ok) {
+                    localStorage.setItem('auth', auth);
+                    document.getElementById('login-screen').style.display = 'none';
+                    document.getElementById('app-content').style.display = 'block';
+                    loadLeads();
+                    updateStats();
+                } else {
+                    document.getElementById('login-error').style.display = 'block';
+                }
+            })
+            .catch(() => {
+                document.getElementById('login-error').style.display = 'block';
+            });
+        }
+
+        // Check for existing session
+        window.addEventListener('DOMContentLoaded', () => {
+            const auth = localStorage.getItem('auth');
+            if (auth) {
+                fetch('/api/health', {
+                    headers: { 'Authorization': 'Basic ' + auth }
+                })
+                .then(res => {
+                    if (res.ok) {
+                        document.getElementById('login-screen').style.display = 'none';
+                        document.getElementById('app-content').style.display = 'block';
+                        loadLeads();
+                        updateStats();
+                    } else {
+                        localStorage.removeItem('auth');
+                    }
+                })
+                .catch(() => localStorage.removeItem('auth'));
+            }
         });
     </script>
 </body>

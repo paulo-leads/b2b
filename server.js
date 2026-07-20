@@ -41,13 +41,28 @@ app.get('/', (req, res, next) => {
 });
 
 app.use((req, res, next) => {
-    if (req.path === '/webhook' || req.path.startsWith('/api/webhook') || req.path.startsWith('/uploads') || req.path.startsWith('/api/media')) return next();
-    if (req.hostname === FACADE_URL) return next();
+    // Rotas públicas (Webhook e arquivos estáticos essenciais)
+    if (req.path === '/webhook' || req.path.startsWith('/api/webhook') || req.path.startsWith('/uploads') || req.path.startsWith('/api/media') || req.path === '/' && req.method === 'GET') {
+        // Permite acesso ao index.html sem auth inicial para carregar a tela de login
+        return next();
+    }
+    
+    // Middleware de Autenticação Básica para TODAS as outras requisições API
     const b64auth = (req.headers.authorization || '').split(' ')[1] || '';
     const [login, password] = Buffer.from(b64auth, 'base64').toString().split(':');
-    if (login && password && login === ADMIN_USER && password === ADMIN_PASS) return next();
-    res.set('WWW-Authenticate', 'Basic realm="REFUGIO LAGUNA V8.5 - AREA RESTRITA"');
-    res.status(401).send('🔒 ACESSO NEGADO.');
+    
+    if (login && password && login === ADMIN_USER && password === ADMIN_PASS) {
+        return next();
+    }
+    
+    // Se for uma requisição API, retorna erro JSON
+    if (req.path.startsWith('/api/')) {
+        res.set('WWW-Authenticate', 'Basic realm="API Access"');
+        return res.status(401).json({ error: 'Acesso negado. Credenciais inválidas.' });
+    }
+
+    // Para rotas web, permite passar para servir o index.html (o login será feito no front)
+    return next();
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
