@@ -1,7 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-const sqlite3 = require('sqlite3').verbose();
-const { open } = require('sqlite');
+const Database = require('better-sqlite3');
 const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
@@ -53,6 +52,18 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname, 'public')));
 let db;
 
+// Inicializar banco de dados
+try {
+    if (!fs.existsSync('database')) fs.mkdirSync('database', { recursive: true });
+    db = new Database(path.join(__dirname, 'database', 'leads.db'));
+    db.exec(`CREATE TABLE IF NOT EXISTS leads (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT NOT NULL UNIQUE, name TEXT, status TEXT DEFAULT 'novo', last_message_at DATETIME, ai_active BOOLEAN DEFAULT 0)`);
+    db.exec(`CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, lead_phone TEXT NOT NULL, wa_message_id TEXT, direction TEXT NOT NULL, type TEXT NOT NULL, content TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)`);
+    console.log('✅ Base de dados inicializada com sucesso');
+} catch (err) {
+    console.error('❌ Erro ao inicializar banco de dados:', err.message);
+    process.exit(1);
+}
+
 app.post('/api/webhook/erp', (req, res) => {
     const authHeader = req.headers.authorization;
     if (authHeader !== 'Bearer refugiolaguna_erp_integra_2026') return res.status(401).json({ error: 'Não Autorizado - Token Inválido' });
@@ -95,8 +106,8 @@ async function sendWhatsAppMessage(data) {
     try {
         let content = data.type === 'text' ? data.text.body : (data.type === 'template' ? `Template: ${data.template.name}` : (data[data.type]?.link || `[Mídia: ${data.type}]`));
 
-        await db.run(`INSERT INTO leads (phone, name, last_message_at, status) VALUES (?, NULL, CURRENT_TIMESTAMP, 'frio') ON CONFLICT(phone) DO UPDATE SET last_message_at = CURRENT_TIMESTAMP`, [data.to]);
-        await db.run(`INSERT INTO messages (lead_phone, direction, type, content) VALUES (?, 'outbound', ?, ?)`, [data.to, data.type, content]);
+        db.prepare(`INSERT INTO leads (phone, name, last_message_at, status) VALUES (?, NULL, CURRENT_TIMESTAMP, 'frio') ON CONFLICT(phone) DO UPDATE SET last_message_at = CURRENT_TIMESTAMP`).run(data.to);
+        db.prepare(`INSERT INTO messages (lead_phone, direction, type, content) VALUES (?, 'outbound', ?, ?)`).run(data.to, data.type, content);
 
         const res = await axios.post(url, data, { headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' } });
 
@@ -110,28 +121,39 @@ async function sendWhatsAppMessage(data) {
     }
 }
 
-(async () => {
-    db = await open({ filename: path.join(__dirname, 'database', 'leads.db'), driver: sqlite3.Database });
-    await db.exec(`CREATE TABLE IF NOT EXISTS leads (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT NOT NULL UNIQUE, name TEXT, status TEXT DEFAULT 'novo', last_message_at DATETIME, ai_active BOOLEAN DEFAULT 1)`);
-    await db.exec(`CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, lead_phone TEXT NOT NULL, wa_message_id TEXT, direction TEXT NOT NULL, type TEXT NOT NULL, content TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)`);
-})();
-
 app.get('/api/leads', async (req, res) => {
     try {
-        const leads = await db.all(`
+        const leads = db.prepare(`
             SELECT l.*,
             (SELECT content FROM messages m WHERE m.lead_phone = l.phone ORDER BY timestamp DESC LIMIT 1) as last_message
             FROM leads l
             WHERE l.status != 'morto'
             ORDER BY l.last_message_at DESC
-        `);
+        `).all();
         res.json({ leads });
     } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get('/api/leads/:phone/messages', async (req, res) => res.json(await db.all('SELECT * FROM messages WHERE lead_phone = ? ORDER BY timestamp ASC', [req.params.phone])));
-app.post('/api/leads/:phone/toggle_ai', async (req, res) => { await db.run(`UPDATE leads SET ai_active = ? WHERE phone = ?`, [req.body.ai_active ? 1 : 0, req.params.phone]); res.json({ success: true }); });
-app.post('/api/leads/:phone/mark_read', async (req, res) => { await db.run(`UPDATE leads SET status = 'lido' WHERE phone = ? AND status = 'respondido'`, [req.params.phone]); res.json({ success: true }); });
+app.get('/api/leads/:phone/messages', async (req, res) => {
+    try {
+        const messages = db.prepare('SELECT * FROM messages WHERE lead_phone = ? ORDER BY timestamp ASC').all(req.params.phone);
+        res.json(messages);
+    } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/leads/:phone/toggle_ai', async (req, res) => {
+    try {
+        db.prepare(`UPDATE leads SET ai_active = ? WHERE phone = ?`).run(req.body.ai_active ? 1 : 0, req.params.phone);
+        res.json({ success: true });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/leads/:phone/mark_read', async (req, res) => {
+    try {
+        db.prepare(`UPDATE leads SET status = 'lido' WHERE phone = ? AND status = 'respondido'`).run(req.params.phone);
+        res.json({ success: true });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+});
 
 app.get('/api/knowledge', (req, res) => {
     try {
@@ -218,9 +240,14 @@ app.post('/api/hunt/batch', async (req, res) => {
 });
 
 app.post('/api/actions/last_chance_blast', async (req, res) => {
-    const targets = await db.all(`SELECT phone FROM leads WHERE status = 'respondido' AND last_message_at >= datetime('now', '-23 hours')`);
-    for (const t of targets) { await sendWhatsAppMessage({ messaging_product: "whatsapp", to: t.phone, type: "text", text: { body: req.body.message } }); await new Promise(r => setTimeout(r, 800)); }
-    res.json({ success: true });
+    try {
+        const targets = db.prepare(`SELECT phone FROM leads WHERE status = 'respondido' AND last_message_at >= datetime('now', '-23 hours')`).all();
+        for (const t of targets) { 
+            await sendWhatsAppMessage({ messaging_product: "whatsapp", to: t.phone, type: "text", text: { body: req.body.message } }); 
+            await new Promise(r => setTimeout(r, 800));
+        }
+        res.json({ success: true });
+    } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post('/api/send/text', async (req, res) => res.json(await sendWhatsAppMessage({ messaging_product: "whatsapp", to: req.body.phone, type: "text", text: { body: req.body.message } })));
@@ -249,7 +276,7 @@ app.get('/api/media/:media_id', async (req, res) => {
 
 app.get('/api/export/csv', async (req, res) => {
     try {
-        const leads = await db.all(`SELECT phone, name, status, datetime(last_message_at, 'localtime') as data_contato FROM leads ORDER BY last_message_at DESC`);
+        const leads = db.prepare(`SELECT phone, name, status, datetime(last_message_at, 'localtime') as data_contato FROM leads ORDER BY last_message_at DESC`).all();
         let csv = '\uFEFFTelefone,Nome,Status,Último Contato\n';
         leads.forEach(l => {
             const safeName = l.name ? l.name.replace(/,/g, '') : 'Desconhecido';
@@ -262,7 +289,7 @@ app.get('/api/export/csv', async (req, res) => {
 });
 
 app.get('/webhook', (req, res) => {
-    const token = req.query['hub.verify_token'] || res.query?.['hub.verify_token'];
+    const token = req.query['hub.verify_token'] || req.query?.['hub.verify_token'];
     token === VERIFY_TOKEN ? res.send(req.query['hub.challenge']) : res.sendStatus(403);
 });
 
@@ -296,7 +323,7 @@ app.post('/webhook', async (req, res) => {
             const from = msg.from;
             const profileName = val.contacts?.[0]?.profile?.name || "Desconhecido";
 
-            await db.run(`INSERT INTO leads (phone, name, last_message_at, status) VALUES (?, ?, CURRENT_TIMESTAMP, 'respondido') ON CONFLICT(phone) DO UPDATE SET last_message_at = CURRENT_TIMESTAMP, name = excluded.name, status = 'respondido'`, [from, profileName]);
+            db.prepare(`INSERT INTO leads (phone, name, last_message_at, status) VALUES (?, ?, CURRENT_TIMESTAMP, 'respondido') ON CONFLICT(phone) DO UPDATE SET last_message_at = CURRENT_TIMESTAMP`).run(from, profileName);
 
             let content = '';
             if (msg.type === 'text') {
@@ -323,7 +350,7 @@ app.post('/webhook', async (req, res) => {
                 content = `[Formato não suportado: ${msg.type}]`;
             }
 
-            await db.run(`INSERT INTO messages (lead_phone, wa_message_id, direction, type, content) VALUES (?, ?, 'inbound', ?, ?)`, [from, msg.id, msg.type, content]);
+            db.prepare(`INSERT INTO messages (lead_phone, wa_message_id, direction, type, content) VALUES (?, ?, 'inbound', ?, ?)`).run(from, msg.id, msg.type, content);
             console.log(`📩 [MENSAGEM RECEBIDA] De: ${from} | Tipo: ${msg.type} | Conteúdo: ${content}`);
         }
     } catch(err) {
