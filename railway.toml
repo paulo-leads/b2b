@@ -1,47 +1,44 @@
-# ==========================================
-# CONFIGURAÇÃO RAILWAY
-# ==========================================
+[build]
+builder = "NIXPACKS"
 
-# Variáveis de Ambiente (configure no painel do Railway)
-# PORT: 3011 (automático no Railway)
-# WHATSAPP_TOKEN: seu_token_aqui
-# PHONE_NUMBER_ID: seu_id_aqui
-# WABA_ID: seu_waba_id_aqui
-# VERIFY_TOKEN: ragazzi_verify_2026
-# PUBLIC_URL: https://seu-projeto.railway.app
-# ADMIN_USER: Ragazzi
-# ADMIN_PASS: Operador01
+[deploy]
+startCommand = "npm start"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+healthcheckPath = "/api/health"
+healthcheckTimeout = 100
+numReplicas = 1
 
-# Build Settings
-NODE_VERSION=18
+[[variables]]
+NODE_VERSION = "18"
 
-# Start Command
-npm start
+[[secrets]]
+name = "WHATSAPP_TOKEN"
+description = "Token da API do WhatsApp Business"
 
-# Health Check Path
-/api/health
+[[secrets]]
+name = "PHONE_NUMBER_ID"
+description = "ID do número de telefone do WhatsApp"
 
-# ==========================================
-# INSTRUÇÕES DE DEPLOY NO RAILWAY
-# ==========================================
-# 1. Acesse https://railway.app e crie uma conta gratuita
-# 2. Clique em "New Project" → "Deploy from GitHub repo"
-# 3. Selecione este repositório
-# 4. O Railway detectará automaticamente que é um projeto Node.js
-# 5. Configure as variáveis de ambiente na aba "Variables":
-#    - WHATSAPP_TOKEN
-#    - PHONE_NUMBER_ID
-#    - WABA_ID
-#    - PUBLIC_URL (use a URL gerada pelo Railway)
-# 6. Aguarde o deploy automático
-# 7. Acesse sua aplicação pela URL fornecida pelo Railway
+[[secrets]]
+name = "WABA_ID"
+description = "ID da Conta Comercial do WhatsApp"
 
-# ==========================================
-# PLANO GRATUITO RAILWAY
-# ==========================================
-# - $5 de crédito mensal gratuito (suficiente para uso moderado)
-# - 500 horas de execução por mês
-# - 1 GB de memória RAM
-# - Banco de dados SQLite persistente com volume
-# - SSL automático
-# - Domínio *.railway.app gratuito
+[[secrets]]
+name = "VERIFY_TOKEN"
+description = "Token de verificação do webhook"
+default = "ragazzi_verify_2026"
+
+[[secrets]]
+name = "PUBLIC_URL"
+description = "URL pública da aplicação (preencher após deploy)"
+
+[[secrets]]
+name = "ADMIN_USER"
+description = "Usuário administrador"
+default = "Ragazzi"
+
+[[secrets]]
+name = "ADMIN_PASS"
+description = "Senha do administrador"
+default = "Operador01"
