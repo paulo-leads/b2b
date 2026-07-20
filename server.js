@@ -14,7 +14,7 @@ const app = express();
 const PORT = process.env.PORT || 3011;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
-const WABA_ID = process.env.WABA_ID; // NOVO: ID da Conta do WhatsApp (WABA)
+const WABA_ID = process.env.WABA_ID;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "ragazzi_verify_2026";
 const PUBLIC_URL = process.env.PUBLIC_URL || "ragazzi.clonedocorretor.com";
 const ADMIN_USER = process.env.ADMIN_USER || "Ragazzi";
@@ -36,11 +36,11 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 app.get('/', (req, res, next) => {
     if (req.hostname === FACADE_URL) return res.sendFile(path.join(__dirname, 'public/index.html'));
-    next();
+    res.json({ status: 'ok', message: 'Servidor B2B WhatsApp rodando!' });
 });
 
 app.use((req, res, next) => {
-    if (req.path === '/webhook' || req.path.startsWith('/api/webhook') || req.path.startsWith('/uploads') || req.path.startsWith('/api/media')) return next();
+    if (req.path === '/webhook' || req.path.startsWith('/api/webhook') || req.path.startsWith('/uploads') || req.path.startsWith('/api/media') || req.path.startsWith('/api/')) return next();
     if (req.hostname === FACADE_URL) return next();
     const b64auth = (req.headers.authorization || '').split(' ')[1] || '';
     const [login, password] = Buffer.from(b64auth, 'base64').toString().split(':');
@@ -50,20 +50,25 @@ app.use((req, res, next) => {
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
-let db;
 
-// Inicializar banco de dados
+// ==========================================
+// INICIALIZAR DB
+// ==========================================
+let db;
 try {
     if (!fs.existsSync('database')) fs.mkdirSync('database', { recursive: true });
     db = new Database(path.join(__dirname, 'database', 'leads.db'));
-    db.exec(`CREATE TABLE IF NOT EXISTS leads (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT NOT NULL UNIQUE, name TEXT, status TEXT DEFAULT 'novo', last_message_at DATETIME, ai_active BOOLEAN DEFAULT 0)`);
+    db.exec(`CREATE TABLE IF NOT EXISTS leads (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT NOT NULL UNIQUE, name TEXT, status TEXT DEFAULT 'novo', last_message_at DATETIME, ai_active BOOLEAN DEFAULT 1)`);
     db.exec(`CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, lead_phone TEXT NOT NULL, wa_message_id TEXT, direction TEXT NOT NULL, type TEXT NOT NULL, content TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)`);
-    console.log('✅ Base de dados inicializada com sucesso');
+    console.log('✅ Base de dados inicializada');
 } catch (err) {
-    console.error('❌ Erro ao inicializar banco de dados:', err.message);
+    console.error('❌ Erro na DB:', err.message);
     process.exit(1);
 }
 
+// ==========================================
+// WEBHOOKS
+// ==========================================
 app.post('/api/webhook/erp', (req, res) => {
     const authHeader = req.headers.authorization;
     if (authHeader !== 'Bearer refugiolaguna_erp_integra_2026') return res.status(401).json({ error: 'Não Autorizado - Token Inválido' });
@@ -302,7 +307,6 @@ app.post('/webhook', async (req, res) => {
         const payloadValue = body.entry?.[0]?.changes?.[0]?.value;
         if (payloadValue && payloadValue.metadata && payloadValue.metadata.phone_number_id) {
             if (payloadValue.metadata.phone_number_id !== process.env.PHONE_NUMBER_ID) {
-                // Se o pacote não for para o nosso número (PHONE_NUMBER_ID do container atual), dropa silenciosamente.
                 return; 
             }
         }
@@ -323,7 +327,7 @@ app.post('/webhook', async (req, res) => {
             const from = msg.from;
             const profileName = val.contacts?.[0]?.profile?.name || "Desconhecido";
 
-            db.prepare(`INSERT INTO leads (phone, name, last_message_at, status) VALUES (?, ?, CURRENT_TIMESTAMP, 'respondido') ON CONFLICT(phone) DO UPDATE SET last_message_at = CURRENT_TIMESTAMP`).run(from, profileName);
+            db.prepare(`INSERT INTO leads (phone, name, last_message_at, status) VALUES (?, ?, CURRENT_TIMESTAMP, 'respondido') ON CONFLICT(phone) DO UPDATE SET name = ?, last_message_at = CURRENT_TIMESTAMP, status = 'respondido'`).run(from, profileName, profileName);
 
             let content = '';
             if (msg.type === 'text') {
