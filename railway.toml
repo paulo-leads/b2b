@@ -1,0 +1,44 @@
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "npm start"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+healthcheckPath = "/api/health"
+healthcheckTimeout = 100
+numReplicas = 1
+
+[[variables]]
+NODE_VERSION = "18"
+
+[[secrets]]
+name = "WHATSAPP_TOKEN"
+description = "Token da API do WhatsApp Business"
+
+[[secrets]]
+name = "PHONE_NUMBER_ID"
+description = "ID do número de telefone do WhatsApp"
+
+[[secrets]]
+name = "WABA_ID"
+description = "ID da Conta Comercial do WhatsApp"
+
+[[secrets]]
+name = "VERIFY_TOKEN"
+description = "Token de verificação do webhook"
+default = "ragazzi_verify_2026"
+
+[[secrets]]
+name = "PUBLIC_URL"
+description = "URL pública da aplicação (preencher após deploy)"
+
+[[secrets]]
+name = "ADMIN_USER"
+description = "Usuário administrador"
+default = "Ragazzi"
+
+[[secrets]]
+name = "ADMIN_PASS"
+description = "Senha do administrador"
+default = "Operador01"
